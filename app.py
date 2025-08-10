@@ -1,8 +1,3 @@
-
-
-## app.py
-
-```python
 import streamlit as st
 from textwrap import dedent
 
