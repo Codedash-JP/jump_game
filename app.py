@@ -1,53 +1,53 @@
+
 import streamlit as st
 
-st.set_page_config(page_title="Mini Mario (Streamlit)", layout="centered")
-st.title("🍄 Mini Pixel Runner — Streamlit Edition")
-st.caption("Arrow keys: ← → move / ↑ or Space: jump. Pixel-art style, smoother camera.")
+st.set_page_config(page_title="Pixel Invaders (Streamlit)", layout="centered")
+st.title("👾 Pixel Invaders — Streamlit Edition")
+st.caption("← → move, Space to shoot. Cute pixel art. Clear all invaders!")
 
-# Taller canvas so bottom area is always visible in Streamlit
-CANVAS_HEIGHT = 760
+CANVAS_HEIGHT = 720
 
-# No f-strings here; JS uses braces freely
+# Keep this as a plain string (no f-strings) so braces in JS don't break Python parsing
 html = """
 <style>
-  /* Make Phaser canvas render crisp pixels */
   #game-root canvas { image-rendering: pixelated; image-rendering: crisp-edges; }
 </style>
-<div id="game-root" style="width: 100%; height: 760px;"></div>
-<script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.min.js"></script>
+<div id=\"game-root\" style=\"width: 100%; height: 720px;\"></div>
+<script src=\"https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.min.js\"></script>
 <script>
 (() => {
   const root = document.getElementById('game-root');
-  const H = root.clientHeight || 760;
-  const W = Math.min(window.innerWidth * 0.98, 1200);
-
-  const levelWidth = 4600; // longer level
-  const groundY = H - 88;  // a little lower so ground fully visible
-
-  let score = 0;
+  const H = root.clientHeight || 720;
+  const W = Math.min(window.innerWidth * 0.98, 1100);
 
   const config = {
     type: Phaser.AUTO,
     width: W,
     height: H,
     parent: 'game-root',
-    backgroundColor: '#87CEEB', // sky
-    physics: { default: 'arcade', arcade: { gravity: { y: 1300 }, debug: false } },
+    backgroundColor: '#1e2a38',
+    physics: { default: 'arcade', arcade: { gravity: { y: 0 }, debug: false } },
     scene: { preload, create, update }
   };
 
-  let cursors, player, platforms, coins, enemies, flag, scoreText;
+  let cursors, shootKey, player, bullets, invaders, shields, enemyBullets;
+  let scoreText, livesText, statusText;
+  let gameOver = false, win = false;
+  let lastShot = 0, shotCooldown = 250; // ms
+  let invaderSpeed = 40; // px/sec base
+  let dir = 1; // 1 -> right, -1 -> left
 
-  // --- Pixel-art helpers ----------------------------------------------------
+  // ---------- Pixel art helpers ----------
   function drawPixelTexture(scene, key, pixels, scale, palette) {
     const g = scene.add.graphics();
-    pixels.forEach((row, y) => {
-      row.forEach((pi, x) => {
-        if (pi === -1) return;
+    for (let y = 0; y < pixels.length; y++) {
+      for (let x = 0; x < pixels[y].length; x++) {
+        const pi = pixels[y][x];
+        if (pi === -1) continue;
         g.fillStyle(palette[pi], 1);
         g.fillRect(x * scale, y * scale, scale, scale);
-      });
-    });
+      }
+    }
     const w = pixels[0].length * scale;
     const h = pixels.length * scale;
     g.generateTexture(key, w, h);
@@ -55,220 +55,206 @@ html = """
   }
 
   function preload() {
-    // Player: 16x16 cute pixel hero (palette indices)
-    const pal = [0x2b2d42, 0xff595e, 0xffca3a, 0x8ac926, 0xffffff, 0x1982c4, 0x6a4c93];
-    const P = -1; // transparent
-    const hero = [
-      [P,P,1,1,1,1,1,1,1,1,1,P,P,P,P],
-      [P,1,1,1,1,1,1,1,1,1,1,1,P,P,P],
-      [1,1,1,1,4,4,4,4,4,4,1,1,1,P,P],
-      [1,1,4,4,4,5,5,5,5,4,4,4,1,1,P],
-      [1,4,4,5,5,5,5,5,5,5,5,4,4,1,P],
-      [1,4,5,5,5,5,5,5,5,5,5,5,4,1,P],
-      [1,4,5,5,2,2,2,2,2,2,5,5,4,1,P],
-      [P,4,5,2,2,2,2,2,2,2,2,5,4,P,P],
-      [P,4,5,2,3,3,2,2,3,3,2,5,4,P,P],
-      [P,1,4,5,2,2,2,2,2,2,5,4,1,P,P],
-      [P,P,1,4,4,5,5,5,5,4,4,1,P,P,P],
-      [P,P,1,1,1,0,0,0,0,1,1,1,P,P,P],
-      [P,P,1,1,0,0,0,0,0,0,1,1,P,P,P],
-      [P,P,1,1,0,0,0,0,0,0,1,1,P,P,P],
-      [P,P,1,1,0,P,P,P,P,0,1,1,P,P,P],
-      [P,P,0,0,0,P,P,P,P,0,0,0,P,P,P]
+    const P = -1;
+    // Cute pastel palette
+    const pal = [0xffffff, 0xffc6ff, 0xbdb2ff, 0xa0c4ff, 0x9bf6ff, 0xcaffbf, 0xfdffb6, 0xffadad, 0xffd6a5, 0x90a4ae, 0x263238];
+
+    // Player ship (16x12)
+    const ship = [
+      [P,P,P,P,P,1,1,1,1,1,P,P,P,P,P],
+      [P,P,P,1,1,1,1,1,1,1,1,1,P,P,P],
+      [P,P,1,1,1,2,2,2,2,2,1,1,1,P,P],
+      [P,1,1,2,2,2,2,3,2,2,2,2,1,1,P],
+      [1,1,2,2,2,2,3,3,3,2,2,2,2,1,1],
+      [1,2,2,2,2,3,3,4,3,3,2,2,2,2,1],
+      [P,P,P,P,2,2,3,4,3,2,2,P,P,P,P],
+      [P,P,P,P,P,2,3,3,3,2,P,P,P,P,P],
+      [P,P,P,P,P,P,2,2,2,P,P,P,P,P,P],
+      [P,P,P,P,P,P,P,2,P,P,P,P,P,P,P],
+      [P,P,P,P,P,P,2,2,2,P,P,P,P,P,P],
+      [P,P,P,P,P,P,2,P,2,P,P,P,P,P,P]
     ];
-    drawPixelTexture(this, 'hero_idle', hero, 3, pal);
+    drawPixelTexture(this, 'ship', ship, 3, pal);
 
-    // Simple enemy (slime)
-    const slime = [
-      [P,P,P,6,6,6,6,6,P,P,P],
-      [P,P,6,6,6,6,6,6,6,P,P],
-      [P,6,6,6,6,6,6,6,6,6,P],
-      [6,6,6,6,6,6,6,6,6,6,6],
-      [6,6,6,5,5,5,5,5,6,6,6],
-      [P,6,5,P,P,P,P,P,5,6,P],
-      [P,P,5,5,5,5,5,5,5,P,P]
+    // Invader (12x10)
+    const inv = [
+      [P,P,7,7,P,P,P,P,7,7,P,P],
+      [P,7,7,7,7,P,P,7,7,7,7,P],
+      [7,7,6,7,7,7,7,7,7,6,7,7],
+      [7,7,7,7,7,7,7,7,7,7,7,7],
+      [P,7,7,P,7,7,7,7,P,7,7,P],
+      [P,7,7,7,7,7,7,7,7,7,7,P],
+      [P,P,7,7,7,7,7,7,7,7,P,P],
+      [P,P,7,P,P,P,P,P,P,7,P,P],
+      [P,7,P,P,P,P,P,P,P,P,7,P],
+      [P,P,7,7,P,P,P,P,7,7,P,P]
     ];
-    drawPixelTexture(this, 'slime', slime, 3, pal);
+    drawPixelTexture(this, 'invader', inv, 3, pal);
 
-    // Coin
-    const coin = [
-      [P,P,2,2,2,2,P,P],
-      [P,2,2,2,2,2,2,P],
-      [2,2,2,2,2,2,2,2],
-      [2,2,2,2,2,2,2,2],
-      [P,2,2,2,2,2,2,P],
-      [P,P,2,2,2,2,P,P]
+    // Enemy bullet & player bullet (tiny)
+    const bulletPix = [ [0] ];
+    drawPixelTexture(this, 'pbullet', bulletPix, 4, [0xffff00]);
+    drawPixelTexture(this, 'ebullet', bulletPix, 4, [0xff6b6b]);
+
+    // Shield block (8x8)
+    const shield = [
+      [9,9,9,9,9,9,9,9],
+      [9,9,9,9,9,9,9,9],
+      [9,9,9,9,9,9,9,9],
+      [9,9,9,9,9,9,9,9],
+      [9,9,9,9,9,9,9,9],
+      [9,9,9,9,9,9,9,9],
+      [9,9,9,9,9,9,9,9],
+      [9,9,9,9,9,9,9,9]
     ];
-    drawPixelTexture(this, 'coin_px', coin, 3, pal);
-
-    // Ground tiles
-    const gpal = [0x3b7a57, 0x2e5a3a, 0x7f5539, 0x5e3b2e];
-    const grass = [
-      [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-      [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-      [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-      [2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2]
-    ];
-    drawPixelTexture(this, 'tile_grass', grass, 4, gpal);
-
-    // Flag
-    const fpal = [0x1e88e5, 0x1b5e20, 0xffffff];
-    const flag = [
-      [P,P,P,1,1,1,P,P,P],
-      [P,P,P,1,2,1,P,P,P],
-      [P,P,P,1,2,1,P,P,P],
-      [P,P,P,1,2,1,P,P,P],
-      [P,P,P,1,2,1,P,P,P],
-      [P,P,P,1,2,1,P,P,P],
-      [P,P,P,1,2,1,P,P,P],
-      [P,P,P,1,2,1,P,P,P],
-      [P,P,P,1,2,1,P,P,P],
-      [P,P,P,1,2,1,P,P,P],
-      [P,P,P,1,2,1,P,P,P],
-      [P,P,P,1,2,1,P,P,P],
-      [P,P,P,1,2,1,P,P,P],
-      [P,P,P,1,2,1,P,P,P],
-      [P,P,P,1,2,1,P,P,P]
-    ];
-    drawPixelTexture(this, 'flag_px', flag, 3, fpal);
-  }
-
-  function buildGround(scene) {
-    const group = scene.physics.add.staticGroup();
-    const tileW = 64; // after scaling
-    for (let x = 0; x < levelWidth; x += tileW) {
-      // Create gaps occasionally
-      const gap = (x > 400 && x % 800 < 140) || (x > 1800 && x % 1000 < 120);
-      if (!gap) {
-        const t = group.create(x + tileW/2, groundY, 'tile_grass');
-        t.refreshBody();
-      }
-    }
-    // Some floating platforms
-    const elevs = [
-      {x: 520, y: groundY-160},
-      {x: 860, y: groundY-230},
-      {x: 1320, y: groundY-170},
-      {x: 1880, y: groundY-210},
-      {x: 2400, y: groundY-140},
-      {x: 2920, y: groundY-220},
-      {x: 3380, y: groundY-160},
-      {x: 3920, y: groundY-210}
-    ];
-    elevs.forEach(p => { const s = group.create(p.x, p.y, 'tile_grass'); s.refreshBody(); });
-    return group;
-  }
-
-  function createCoins(scene) {
-    const grp = scene.physics.add.group();
-    for (let x = 300; x < levelWidth - 200; x += 240) {
-      const y = groundY - 160 - (Math.sin(x/250) * 60);
-      const c = grp.create(x, y, 'coin_px');
-      c.setCircle(12);
-      c.setBounce(0.2);
-      c.body.setAllowGravity(false);
-    }
-    return grp;
-  }
-
-  function createEnemies(scene) {
-    const grp = scene.physics.add.group();
-    const positions = [700, 1500, 2100, 2700, 3300, 4100];
-    positions.forEach((x, i) => {
-      const e = grp.create(x, groundY-36, 'slime');
-      e.setVelocityX(i % 2 === 0 ? 70 : -70);
-      e.patrolLeft = x - 120;
-      e.patrolRight = x + 120;
-      e.body.setSize(42, 18).setOffset(5, 20);
-    });
-    return grp;
+    drawPixelTexture(this, 'shield', shield, 4, pal);
   }
 
   function create() {
-    // World bounds and camera
-    this.cameras.main.setBounds(0, 0, levelWidth, H);
-    this.physics.world.setBounds(0, 0, levelWidth, H);
-
-    // Parallax clouds
-    const cloud = this.add.graphics();
-    cloud.fillStyle(0xffffff, 0.6);
-    for (let i=0; i<12; i++) {
-      const x = i * 380 + 100 * Math.random();
-      const y = 60 + 120 * Math.random();
-      cloud.fillCircle(x, y, 24);
-      cloud.fillCircle(x+24, y+10, 20);
-      cloud.fillCircle(x-22, y+12, 18);
+    // Stars background (cute twinkles)
+    const stars = this.add.graphics();
+    for (let i=0; i<120; i++) {
+      const x = Math.random() * W;
+      const y = Math.random() * H;
+      const a = 0.3 + Math.random() * 0.5;
+      stars.fillStyle(0xffffff, a);
+      stars.fillRect(x, y, 2, 2);
     }
-    cloud.setScrollFactor(0.5);
 
-    platforms = buildGround(this);
+    // Groups
+    bullets = this.physics.add.group({ maxSize: 6 });
+    enemyBullets = this.physics.add.group({ maxSize: 6 });
+    invaders = this.physics.add.group();
+    shields = this.physics.add.staticGroup();
 
-    player = this.physics.add.sprite(80, groundY-120, 'hero_idle');
+    // Player
+    player = this.physics.add.sprite(W/2, H - 80, 'ship');
     player.setCollideWorldBounds(true);
-    player.body.setSize(36, 42).setOffset(6, 6);
+    player.lives = 3;
 
-    coins = createCoins(this);
-    enemies = createEnemies(this);
+    // Build invader grid
+    const rows = 5, cols = 10;
+    const startX = 80, startY = 110, gapX = 64, gapY = 48;
+    for (let r=0; r<rows; r++) {
+      for (let c=0; c<cols; c++) {
+        const inv = invaders.create(startX + c*gapX, startY + r*gapY, 'invader');
+        inv.setImmovable(true);
+        inv.body.allowGravity = false;
+        inv.row = r; inv.col = c;
+      }
+    }
 
-    flag = this.physics.add.staticImage(levelWidth - 80, groundY - 48, 'flag_px');
-
-    // Camera follow with mild zoom and offset to show more bottom area
-    const cam = this.cameras.main;
-    cam.startFollow(player, true, 0.12, 0.12);
-    cam.setZoom(1.6);
-    cam.setFollowOffset(0, 80); // push player upward in view -> more bottom visible
-
-    // Colliders & overlaps
-    this.physics.add.collider(player, platforms);
-    this.physics.add.collider(enemies, platforms);
-    this.physics.add.collider(enemies, enemies);
-    this.physics.add.overlap(player, coins, (pl, coin) => { coin.disableBody(true, true); score += 1; scoreText.setText('Coins: ' + score); });
-    this.physics.add.overlap(player, flag, () => win(this));
-    this.physics.add.overlap(player, enemies, () => die(this));
+    // Shields (three bunkers)
+    const bunkerY = H - 160;
+    [W*0.25, W*0.5, W*0.75].forEach(cx => {
+      for (let i=-3; i<=3; i++) {
+        for (let j=0; j<3; j++) {
+          const b = shields.create(cx + i*18, bunkerY + j*18, 'shield');
+          b.refreshBody();
+        }
+      }
+    });
 
     // UI
-    scoreText = this.add.text(12, 12, 'Coins: 0', { fontFamily: 'monospace', fontSize: '18px', backgroundColor: 'rgba(0,0,0,0.35)', padding: 6 }).setScrollFactor(0);
+    scoreText = this.add.text(12, 12, 'Score: 0', { fontFamily: 'monospace', fontSize: '18px', color: '#ffffff', backgroundColor: 'rgba(0,0,0,0.35)', padding: 6 });
+    livesText = this.add.text(W - 160, 12, 'Lives: 3', { fontFamily: 'monospace', fontSize: '18px', color: '#ffffff', backgroundColor: 'rgba(0,0,0,0.35)', padding: 6 }).setOrigin(0,0);
+
+    statusText = this.add.text(W/2, H/2, '', { fontFamily: 'monospace', fontSize: '28px', color: '#ffd6a5' }).setOrigin(0.5);
 
     // Controls
     cursors = this.input.keyboard.createCursorKeys();
+    shootKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+
+    // Collisions
+    this.physics.add.overlap(bullets, invaders, (b, inv) => { b.destroy(); inv.destroy(); addScore(10); checkWin(this); });
+    this.physics.add.collider(bullets, shields, (b, s) => { b.destroy(); s.destroy(); });
+    this.physics.add.collider(enemyBullets, shields, (b, s) => { b.destroy(); s.destroy(); });
+    this.physics.add.overlap(enemyBullets, player, (b, p) => { b.destroy(); damage(this); });
+
+    // Enemy shooting timer
+    this.time.addEvent({ delay: 900, loop: true, callback: () => enemyShoot(this) });
   }
 
-  function die(scene) {
+  function addScore(v) {
+    const s = parseInt(scoreText.getData('score') || 0) + v;
+    scoreText.setData('score', s);
+    scoreText.setText('Score: ' + s);
+  }
+
+  function damage(scene) {
+    if (gameOver) return;
+    player.lives -= 1;
+    livesText.setText('Lives: ' + player.lives);
+    player.setTint(0xff6b6b);
+    scene.time.delayedCall(150, () => player.clearTint());
+    if (player.lives <= 0) {
+      endGame(scene, false);
+    }
+  }
+
+  function enemyShoot(scene) {
+    if (gameOver) return;
+    const alive = invaders.getChildren();
+    if (alive.length === 0) return;
+    const shooter = Phaser.Utils.Array.GetRandom(alive);
+    const b = enemyBullets.create(shooter.x, shooter.y + 10, 'ebullet');
+    b.setVelocityY(260);
+  }
+
+  function endGame(scene, didWin) {
+    gameOver = true; win = didWin;
+    statusText.setText(didWin ? 'YOU WIN! 🎉' : 'GAME OVER 💥');
     scene.physics.pause();
-    scene.add.text(player.x-80, player.y-40, 'GAME OVER', { fontFamily: 'monospace', fontSize: '28px', color: '#ff5555' });
-    setTimeout(() => scene.scene.restart(), 1100);
+    scene.time.delayedCall(1200, () => scene.scene.restart());
   }
 
-  function win(scene) {
-    scene.physics.pause();
-    scene.add.text(player.x-60, player.y-60, 'YOU WIN!', { fontFamily: 'monospace', fontSize: '28px', color: '#55ff55' });
+  function checkWin(scene) {
+    if (invaders.countActive(true) === 0) {
+      endGame(scene, true);
+    }
   }
 
-  function update() {
-    // Enemy patrol logic
-    enemies.children.iterate(e => {
-      if (!e) return;
-      if (e.x < e.patrolLeft) { e.setVelocityX(80); }
-      if (e.x > e.patrolRight) { e.setVelocityX(-80); }
-    });
+  function update(time, delta) {
+    if (gameOver) return;
 
-    const onGround = player.body.blocked.down;
-
+    // Player move
     if (cursors.left.isDown) {
-      player.setVelocityX(-210);
-      player.flipX = true;
+      player.setVelocityX(-280);
     } else if (cursors.right.isDown) {
-      player.setVelocityX(210);
-      player.flipX = false;
+      player.setVelocityX(280);
     } else {
       player.setVelocityX(0);
     }
 
-    if ((cursors.up.isDown || (cursors.space && cursors.space.isDown)) && onGround) {
-      player.setVelocityY(-470);
+    // Shoot
+    if (Phaser.Input.Keyboard.JustDown(shootKey) && time - lastShot > shotCooldown) {
+      lastShot = time;
+      const b = bullets.create(player.x, player.y - 20, 'pbullet');
+      b.setVelocityY(-520);
     }
 
-    if (player.y > H + 100) { die(this); }
+    // Move invaders horizontally
+    const dx = dir * invaderSpeed * (delta/1000);
+    let touchedEdge = false;
+    invaders.children.iterate(inv => {
+      if (!inv) return;
+      inv.x += dx;
+      if (inv.x > W - 20 || inv.x < 20) touchedEdge = true;
+    });
+    if (touchedEdge) {
+      dir *= -1;
+      invaders.children.iterate(inv => { if (inv) inv.y += 18; });
+      invaderSpeed = Math.min(invaderSpeed + 8, 180); // speed up a bit
+    }
+
+    // Lose if invaders reach player line
+    let reached = false;
+    invaders.children.iterate(inv => { if (inv && inv.y > player.y - 40) reached = true; });
+    if (reached) endGame(this, false);
+
+    // Cleanup off-screen bullets
+    bullets.children.iterate(b => { if (b && b.y < -10) b.destroy(); });
+    enemyBullets.children.iterate(b => { if (b && b.y > H + 10) b.destroy(); });
   }
 
   new Phaser.Game(config);
@@ -279,6 +265,5 @@ html = """
 st.components.v1.html(html, height=CANVAS_HEIGHT, scrolling=False)
 
 st.divider()
-st.write(
-    "Now pixel-art and taller canvas. If you still can’t see the bottom, switch to ‘wide’ layout from the page menu."
-)
+st.write("Cuter pixel palette, bunkers, enemy fire, and auto-restart. Want mobile touch buttons or sounds next?")
+```
