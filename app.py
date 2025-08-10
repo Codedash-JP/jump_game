@@ -1,25 +1,28 @@
 import streamlit as st
 
 st.set_page_config(page_title="Mini Mario (Streamlit)", layout="centered")
-st.title("🍄 Mini Mario — Streamlit Edition")
-st.caption("Arrow keys to move/jump. Collect coins, avoid enemies, reach the flag!")
+st.title("🍄 Mini Pixel Runner — Streamlit Edition")
+st.caption("Arrow keys: ← → move / ↑ or Space: jump. Pixel-art style, smoother camera.")
 
-# Canvas height used by Streamlit container (also read by JS at runtime)
-CANVAS_HEIGHT = 640
+# Taller canvas so bottom area is always visible in Streamlit
+CANVAS_HEIGHT = 760
 
-# NOTE: Avoid f-strings here so we don't need to escape { } used by JavaScript.
+# No f-strings here; JS uses braces freely
 html = """
-<div id="game-root" style="width: 100%; height: 640px;"></div>
+<style>
+  /* Make Phaser canvas render crisp pixels */
+  #game-root canvas { image-rendering: pixelated; image-rendering: crisp-edges; }
+</style>
+<div id="game-root" style="width: 100%; height: 760px;"></div>
 <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.min.js"></script>
 <script>
 (() => {
-  // Read actual height from the div so Python/JS stay in sync without string interpolation
   const root = document.getElementById('game-root');
-  const H = root.clientHeight || 640;
-  const W = Math.min(window.innerWidth * 0.95, 1200);
+  const H = root.clientHeight || 760;
+  const W = Math.min(window.innerWidth * 0.98, 1200);
 
-  const levelWidth = 4200; // pixels
-  const groundY = H - 80;
+  const levelWidth = 4600; // longer level
+  const groundY = H - 88;  // a little lower so ground fully visible
 
   let score = 0;
 
@@ -28,77 +31,141 @@ html = """
     width: W,
     height: H,
     parent: 'game-root',
-    physics: {
-      default: 'arcade',
-      arcade: { gravity: { y: 1200 }, debug: false }
-    },
+    backgroundColor: '#87CEEB', // sky
+    physics: { default: 'arcade', arcade: { gravity: { y: 1300 }, debug: false } },
     scene: { preload, create, update }
   };
 
-  let cursors, player, platforms, coins, enemies, flag, scoreText, tipText;
+  let cursors, player, platforms, coins, enemies, flag, scoreText;
 
-  function makeRectTexture(scene, key, w, h, color) {
+  // --- Pixel-art helpers ----------------------------------------------------
+  function drawPixelTexture(scene, key, pixels, scale, palette) {
     const g = scene.add.graphics();
-    g.fillStyle(color, 1);
-    g.fillRoundedRect(0, 0, w, h, Math.min(w,h)*0.15);
+    pixels.forEach((row, y) => {
+      row.forEach((pi, x) => {
+        if (pi === -1) return;
+        g.fillStyle(palette[pi], 1);
+        g.fillRect(x * scale, y * scale, scale, scale);
+      });
+    });
+    const w = pixels[0].length * scale;
+    const h = pixels.length * scale;
     g.generateTexture(key, w, h);
     g.destroy();
   }
 
-  function makeCircleTexture(scene, key, r, color) {
-    const g = scene.add.graphics();
-    g.fillStyle(color, 1);
-    g.fillCircle(r, r, r);
-    g.generateTexture(key, r*2, r*2);
-    g.destroy();
-  }
-
   function preload() {
-    // Generate minimal textures so we don't load any assets
-    makeRectTexture(this, 'player', 36, 40, 0xE74C3C); // red
-    makeRectTexture(this, 'block', 64, 32, 0x2ECC71);  // green
-    makeRectTexture(this, 'brick', 48, 24, 0x8E44AD);  // purple
-    makeRectTexture(this, 'flag', 20, 80, 0x3498DB);   // blue
-    makeCircleTexture(this, 'coin', 10, 0xF1C40F);     // yellow
-    makeRectTexture(this, 'enemy', 32, 28, 0x2C3E50);  // dark
+    // Player: 16x16 cute pixel hero (palette indices)
+    const pal = [0x2b2d42, 0xff595e, 0xffca3a, 0x8ac926, 0xffffff, 0x1982c4, 0x6a4c93];
+    const P = -1; // transparent
+    const hero = [
+      [P,P,1,1,1,1,1,1,1,1,1,P,P,P,P],
+      [P,1,1,1,1,1,1,1,1,1,1,1,P,P,P],
+      [1,1,1,1,4,4,4,4,4,4,1,1,1,P,P],
+      [1,1,4,4,4,5,5,5,5,4,4,4,1,1,P],
+      [1,4,4,5,5,5,5,5,5,5,5,4,4,1,P],
+      [1,4,5,5,5,5,5,5,5,5,5,5,4,1,P],
+      [1,4,5,5,2,2,2,2,2,2,5,5,4,1,P],
+      [P,4,5,2,2,2,2,2,2,2,2,5,4,P,P],
+      [P,4,5,2,3,3,2,2,3,3,2,5,4,P,P],
+      [P,1,4,5,2,2,2,2,2,2,5,4,1,P,P],
+      [P,P,1,4,4,5,5,5,5,4,4,1,P,P,P],
+      [P,P,1,1,1,0,0,0,0,1,1,1,P,P,P],
+      [P,P,1,1,0,0,0,0,0,0,1,1,P,P,P],
+      [P,P,1,1,0,0,0,0,0,0,1,1,P,P,P],
+      [P,P,1,1,0,P,P,P,P,0,1,1,P,P,P],
+      [P,P,0,0,0,P,P,P,P,0,0,0,P,P,P]
+    ];
+    drawPixelTexture(this, 'hero_idle', hero, 3, pal);
+
+    // Simple enemy (slime)
+    const slime = [
+      [P,P,P,6,6,6,6,6,P,P,P],
+      [P,P,6,6,6,6,6,6,6,P,P],
+      [P,6,6,6,6,6,6,6,6,6,P],
+      [6,6,6,6,6,6,6,6,6,6,6],
+      [6,6,6,5,5,5,5,5,6,6,6],
+      [P,6,5,P,P,P,P,P,5,6,P],
+      [P,P,5,5,5,5,5,5,5,P,P]
+    ];
+    drawPixelTexture(this, 'slime', slime, 3, pal);
+
+    // Coin
+    const coin = [
+      [P,P,2,2,2,2,P,P],
+      [P,2,2,2,2,2,2,P],
+      [2,2,2,2,2,2,2,2],
+      [2,2,2,2,2,2,2,2],
+      [P,2,2,2,2,2,2,P],
+      [P,P,2,2,2,2,P,P]
+    ];
+    drawPixelTexture(this, 'coin_px', coin, 3, pal);
+
+    // Ground tiles
+    const gpal = [0x3b7a57, 0x2e5a3a, 0x7f5539, 0x5e3b2e];
+    const grass = [
+      [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+      [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+      [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+      [2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2]
+    ];
+    drawPixelTexture(this, 'tile_grass', grass, 4, gpal);
+
+    // Flag
+    const fpal = [0x1e88e5, 0x1b5e20, 0xffffff];
+    const flag = [
+      [P,P,P,1,1,1,P,P,P],
+      [P,P,P,1,2,1,P,P,P],
+      [P,P,P,1,2,1,P,P,P],
+      [P,P,P,1,2,1,P,P,P],
+      [P,P,P,1,2,1,P,P,P],
+      [P,P,P,1,2,1,P,P,P],
+      [P,P,P,1,2,1,P,P,P],
+      [P,P,P,1,2,1,P,P,P],
+      [P,P,P,1,2,1,P,P,P],
+      [P,P,P,1,2,1,P,P,P],
+      [P,P,P,1,2,1,P,P,P],
+      [P,P,P,1,2,1,P,P,P],
+      [P,P,P,1,2,1,P,P,P],
+      [P,P,P,1,2,1,P,P,P],
+      [P,P,P,1,2,1,P,P,P]
+    ];
+    drawPixelTexture(this, 'flag_px', flag, 3, fpal);
   }
 
-  function createGroundWithGaps(scene) {
+  function buildGround(scene) {
     const group = scene.physics.add.staticGroup();
-    // Lay base ground, creating occasional gaps
-    const tileW = 64;
+    const tileW = 64; // after scaling
     for (let x = 0; x < levelWidth; x += tileW) {
-      const gap = (x > 300 && x % 700 < 120) || (x > 1500 && x % 900 < 100);
+      // Create gaps occasionally
+      const gap = (x > 400 && x % 800 < 140) || (x > 1800 && x % 1000 < 120);
       if (!gap) {
-        const b = group.create(x + tileW/2, groundY, 'block');
-        b.refreshBody();
+        const t = group.create(x + tileW/2, groundY, 'tile_grass');
+        t.refreshBody();
       }
     }
-    // Add some elevated platforms
+    // Some floating platforms
     const elevs = [
-      {x: 500, y: groundY-140},
-      {x: 700, y: groundY-220},
-      {x: 1050, y: groundY-160},
-      {x: 1600, y: groundY-200},
-      {x: 2100, y: groundY-140},
-      {x: 2600, y: groundY-220},
-      {x: 3050, y: groundY-160},
-      {x: 3550, y: groundY-200}
+      {x: 520, y: groundY-160},
+      {x: 860, y: groundY-230},
+      {x: 1320, y: groundY-170},
+      {x: 1880, y: groundY-210},
+      {x: 2400, y: groundY-140},
+      {x: 2920, y: groundY-220},
+      {x: 3380, y: groundY-160},
+      {x: 3920, y: groundY-210}
     ];
-    elevs.forEach(p => {
-      const s = group.create(p.x, p.y, 'brick');
-      s.refreshBody();
-    });
+    elevs.forEach(p => { const s = group.create(p.x, p.y, 'tile_grass'); s.refreshBody(); });
     return group;
   }
 
   function createCoins(scene) {
     const grp = scene.physics.add.group();
-    for (let x = 250; x < levelWidth - 200; x += 220) {
-      const y = groundY - 150 - (Math.sin(x/240) * 60);
-      const c = grp.create(x, y, 'coin');
-      c.setBounce(0.3);
-      c.setCircle(10);
+    for (let x = 300; x < levelWidth - 200; x += 240) {
+      const y = groundY - 160 - (Math.sin(x/250) * 60);
+      const c = grp.create(x, y, 'coin_px');
+      c.setCircle(12);
+      c.setBounce(0.2);
       c.body.setAllowGravity(false);
     }
     return grp;
@@ -106,62 +173,70 @@ html = """
 
   function createEnemies(scene) {
     const grp = scene.physics.add.group();
-    const positions = [600, 1300, 1900, 2400, 3000, 3600];
+    const positions = [700, 1500, 2100, 2700, 3300, 4100];
     positions.forEach((x, i) => {
-      const e = grp.create(x, groundY-40, 'enemy');
-      e.setCollideWorldBounds(false);
-      e.setVelocityX(i % 2 === 0 ? 80 : -80);
+      const e = grp.create(x, groundY-36, 'slime');
+      e.setVelocityX(i % 2 === 0 ? 70 : -70);
       e.patrolLeft = x - 120;
       e.patrolRight = x + 120;
-      e.body.setSize(28, 24); // tighter hitbox
+      e.body.setSize(42, 18).setOffset(5, 20);
     });
     return grp;
   }
 
   function create() {
-    // Level world bounds larger than viewport
+    // World bounds and camera
     this.cameras.main.setBounds(0, 0, levelWidth, H);
     this.physics.world.setBounds(0, 0, levelWidth, H);
 
-    platforms = createGroundWithGaps(this);
+    // Parallax clouds
+    const cloud = this.add.graphics();
+    cloud.fillStyle(0xffffff, 0.6);
+    for (let i=0; i<12; i++) {
+      const x = i * 380 + 100 * Math.random();
+      const y = 60 + 120 * Math.random();
+      cloud.fillCircle(x, y, 24);
+      cloud.fillCircle(x+24, y+10, 20);
+      cloud.fillCircle(x-22, y+12, 18);
+    }
+    cloud.setScrollFactor(0.5);
 
-    player = this.physics.add.sprite(80, groundY-120, 'player');
-    player.setBounce(0.05);
+    platforms = buildGround(this);
+
+    player = this.physics.add.sprite(80, groundY-120, 'hero_idle');
     player.setCollideWorldBounds(true);
-    player.body.setSize(26, 36).setOffset(5, 4);
+    player.body.setSize(36, 42).setOffset(6, 6);
 
     coins = createCoins(this);
     enemies = createEnemies(this);
 
-    // Finish flag
-    flag = this.physics.add.staticImage(levelWidth - 80, groundY - 40, 'flag');
+    flag = this.physics.add.staticImage(levelWidth - 80, groundY - 48, 'flag_px');
 
-    // Camera follow
-    this.cameras.main.startFollow(player, true, 0.1, 0.1);
+    // Camera follow with mild zoom and offset to show more bottom area
+    const cam = this.cameras.main;
+    cam.startFollow(player, true, 0.12, 0.12);
+    cam.setZoom(1.6);
+    cam.setFollowOffset(0, 80); // push player upward in view -> more bottom visible
 
     // Colliders & overlaps
     this.physics.add.collider(player, platforms);
     this.physics.add.collider(enemies, platforms);
     this.physics.add.collider(enemies, enemies);
-    this.physics.add.overlap(player, coins, (pl, coin) => {
-      coin.disableBody(true, true);
-      score += 1;
-      scoreText.setText('Coins: ' + score);
-    });
+    this.physics.add.overlap(player, coins, (pl, coin) => { coin.disableBody(true, true); score += 1; scoreText.setText('Coins: ' + score); });
     this.physics.add.overlap(player, flag, () => win(this));
     this.physics.add.overlap(player, enemies, () => die(this));
 
     // UI
     scoreText = this.add.text(12, 12, 'Coins: 0', { fontFamily: 'monospace', fontSize: '18px', backgroundColor: 'rgba(0,0,0,0.35)', padding: 6 }).setScrollFactor(0);
-    tipText = this.add.text(12, 40, '← → move   ↑ jump', { fontFamily: 'monospace', fontSize: '16px', backgroundColor: 'rgba(0,0,0,0.25)', padding: 6 }).setScrollFactor(0);
 
+    // Controls
     cursors = this.input.keyboard.createCursorKeys();
   }
 
   function die(scene) {
     scene.physics.pause();
     scene.add.text(player.x-80, player.y-40, 'GAME OVER', { fontFamily: 'monospace', fontSize: '28px', color: '#ff5555' });
-    setTimeout(() => scene.scene.restart(), 1200);
+    setTimeout(() => scene.scene.restart(), 1100);
   }
 
   function win(scene) {
@@ -173,11 +248,10 @@ html = """
     // Enemy patrol logic
     enemies.children.iterate(e => {
       if (!e) return;
-      if (e.x < e.patrolLeft) { e.setVelocityX(90); }
-      if (e.x > e.patrolRight) { e.setVelocityX(-90); }
+      if (e.x < e.patrolLeft) { e.setVelocityX(80); }
+      if (e.x > e.patrolRight) { e.setVelocityX(-80); }
     });
 
-    // Basic platformer controls
     const onGround = player.body.blocked.down;
 
     if (cursors.left.isDown) {
@@ -191,10 +265,9 @@ html = """
     }
 
     if ((cursors.up.isDown || (cursors.space && cursors.space.isDown)) && onGround) {
-      player.setVelocityY(-460);
+      player.setVelocityY(-470);
     }
 
-    // If player falls
     if (player.y > H + 100) { die(this); }
   }
 
@@ -207,6 +280,5 @@ st.components.v1.html(html, height=CANVAS_HEIGHT, scrolling=False)
 
 st.divider()
 st.write(
-    "Tip: If the canvas doesn’t fit, try the ‘wide’ layout in the page menu (top-right). "
-    "This game is 100% client-side and embedded with Phaser.js via Streamlit components."
+    "Now pixel-art and taller canvas. If you still can’t see the bottom, switch to ‘wide’ layout from the page menu."
 )
