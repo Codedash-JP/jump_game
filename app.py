@@ -1,11 +1,4 @@
-# Files
 
-Below are two files:
-
-1. `app.py`
-2. `requirements.txt`
-
----
 
 ## app.py
 
